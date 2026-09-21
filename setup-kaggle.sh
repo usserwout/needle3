@@ -31,6 +31,12 @@ nvidia-smi -L >/dev/null 2>&1 || die \
 # Keep the screening study reproducible when Kaggle offers a dual-T4 runtime.
 export CUDA_VISIBLE_DEVICES=0
 
+# Kaggle injects a global sitecustomize via these variables. In an isolated
+# environment it imports optional global packages such as wrapt and emits a
+# misleading startup failure. The study environment must not inherit it.
+unset PYTHONPATH PYTHONHOME
+export PYTHONNOUSERSITE=1
+
 python - <<'PY'
 import sys
 if sys.version_info[:2] != (3, 12):

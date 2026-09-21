@@ -27,6 +27,8 @@ def test_kaggle_setup_is_valid_bash_and_guards_gpu_before_installing():
     assert '"numpy==${NUMPY_VERSION}"' in source
     assert "jax.default_backend()" in source
     assert "export CUDA_VISIBLE_DEVICES=0" in source
+    assert "unset PYTHONPATH PYTHONHOME" in source
+    assert "export PYTHONNOUSERSITE=1" in source
     assert 'source "${VENV_DIR}/bin/activate"' in source
     assert "python -m venv" not in source
     assert ".venv-kaggle/bin/python" in source
