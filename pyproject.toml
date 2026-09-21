@@ -1,0 +1,47 @@
+[project]
+name = "cactus-needle"
+version = "3.0.1"
+description = "A 14MB foundation tool-calling model for tiny devices: inference, LoRA finetuning, and build."
+requires-python = ">=3.9"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "huggingface_hub",
+]
+
+[project.optional-dependencies]
+train = [
+  "numpy",
+  "jax",
+  "jaxlib",
+  "flax>=0.10.2",
+  "optax",
+  "safetensors",
+  "sentencepiece",
+  "pyyaml"
+]
+gpu = ["jax[cuda12]"]
+metal = [
+    "jax==0.4.38",
+    "jaxlib==0.4.38",
+    "jax-metal"
+]
+test = ["pytest", "pydantic"]
+
+[project.scripts]
+needle = "needle.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["needle*"]
+
+[tool.setuptools.package-data]
+"needle.model" = ["*.model", "*.vocab"]
+"needle.playground" = ["index.html", "app.js", "style.css"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: end-to-end JAX build/finetune tests (init a tiny model)"]
