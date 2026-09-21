@@ -39,9 +39,13 @@ if sys.version_info[:2] != (3, 12):
     )
 PY
 
-if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+if [[ ! -x "${VENV_DIR}/bin/python" || ! -x "${VENV_DIR}/bin/pip" ]]; then
     printf 'Creating isolated environment at %s...\n' "${VENV_DIR}"
-    python -m venv "${VENV_DIR}"
+    # Kaggle's base Python may not ship a working ensurepip, so stdlib venv can
+    # leave a half-created environment. virtualenv carries its own pip seed and
+    # --clear safely repairs that script-owned directory on a repeated run.
+    python -m pip install --quiet --disable-pip-version-check "virtualenv==20.29.1"
+    python -m virtualenv --clear --python "$(command -v python)" "${VENV_DIR}"
 fi
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"

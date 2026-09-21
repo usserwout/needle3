@@ -17,8 +17,8 @@ def test_kaggle_setup_is_valid_bash_and_guards_gpu_before_installing():
 
     source = SCRIPT.read_text()
     gpu_check = source.index("nvidia-smi")
-    venv_creation = source.index('python -m venv "${VENV_DIR}"')
-    package_install = source.index("pip install")
+    venv_creation = source.index('python -m virtualenv --clear')
+    package_install = source.index("pip install --quiet --no-cache-dir")
     assert gpu_check < package_install
     assert venv_creation < package_install
     assert 'readonly JAX_VERSION="0.4.38"' in source
@@ -28,6 +28,7 @@ def test_kaggle_setup_is_valid_bash_and_guards_gpu_before_installing():
     assert "jax.default_backend()" in source
     assert "export CUDA_VISIBLE_DEVICES=0" in source
     assert 'source "${VENV_DIR}/bin/activate"' in source
+    assert "python -m venv" not in source
     assert ".venv-kaggle/bin/python" in source
     assert "fetch_checkpoint" in source
     assert 'DroidCall_train.jsonl' in source
