@@ -122,7 +122,15 @@ def run_training_loop(
     run_dir = os.path.join(checkpoint_dir, run_id)
     ckpt_path = os.path.join(run_dir, "checkpoint.safetensors")
     ckpt_data = read_checkpoint(ckpt_path)
-    params = ckpt_data["params"]
+    # The published checkpoint is stored in FP16. Adam's 1e-8 epsilon rounds
+    # to zero in FP16, and FP16 moment accumulators can overflow. Keep master
+    # weights and optimizer state in FP32; model layers still use config.dtype.
+    params = jax.tree_util.tree_map(
+        lambda value: jnp.asarray(value, dtype=jnp.float32)
+        if np.issubdtype(np.asarray(value).dtype, np.floating)
+        else jnp.asarray(value),
+        ckpt_data["params"],
+    )
     config_dict = ckpt_data["config"]
     config = runtime_transformer_config(config_dict)
     metadata = ckpt_data.get("run") or ckpt_data.get("metadata") or {}
@@ -145,6 +153,8 @@ def run_training_loop(
         with open(state_path, "rb") as handle:
             saved_state = pickle.load(handle)
         start_step = int(saved_state["step"])
+        if saved_state.get("optimizer_precision") != "float32":
+            raise ValueError("saved optimizer state predates FP32 training; retransplant and train without --resume")
         opt_state = saved_state["opt_state"]
         if start_step > total_steps:
             raise ValueError(
@@ -186,11 +196,11 @@ def run_training_loop(
         else:
             total_loss = ce_loss
 
-        return total_loss, (ce_loss, logits)
+        return total_loss, ce_loss
 
     @jax.jit
     def train_step(p, opt_s, ids, mask, top_i, top_l, rem_m):
-        (loss, (ce, _)), grads = jax.value_and_grad(loss_fn, has_aux=True)(p, ids, mask, top_i, top_l, rem_m)
+        (loss, ce), grads = jax.value_and_grad(loss_fn, has_aux=True)(p, ids, mask, top_i, top_l, rem_m)
         updates, new_opt_s = optimizer.update(grads, opt_s, p)
         updates = freeze_scanned_cla_consumer_updates(updates, cla_consumers)
         new_p = optax.apply_updates(p, updates)
@@ -234,7 +244,13 @@ def run_training_loop(
         params, opt_state, loss_val, ce_val = train_step(
             params, opt_state, jnp.asarray(batch_ids), jnp.asarray(batch_mask), top_i, top_l, rem_m
         )
-        step_losses.append(float(loss_val))
+        loss_scalar, ce_scalar = float(loss_val), float(ce_val)
+        if not np.isfinite(loss_scalar) or not np.isfinite(ce_scalar):
+            raise FloatingPointError(
+                f"{run_id} produced nonfinite loss at step {step + 1}: "
+                f"loss={loss_scalar}, CE={ce_scalar}; checkpoint was not saved"
+            )
+        step_losses.append(loss_scalar)
 
         if (step + 1) % 25 == 0 or step == requested_end_step - 1:
             msg = f"Run {run_id} | Step {step+1}/{total_steps} | Loss: {float(loss_val):.4f} | CE: {float(ce_val):.4f}"
@@ -251,7 +267,8 @@ def run_training_loop(
                 "run": metadata,
             })
             with open(state_path, "wb") as handle:
-                pickle.dump({"step": step + 1, "opt_state": opt_state}, handle)
+                pickle.dump({"step": step + 1, "opt_state": opt_state,
+                             "optimizer_precision": "float32"}, handle)
 
     elapsed = time.time() - start_time
     completed_steps = requested_end_step
@@ -271,7 +288,8 @@ def run_training_loop(
         "run": metadata,
     })
     with open(state_path, "wb") as handle:
-        pickle.dump({"step": completed_steps, "opt_state": opt_state}, handle)
+        pickle.dump({"step": completed_steps, "opt_state": opt_state,
+                     "optimizer_precision": "float32"}, handle)
 
     summary = {
         "run_id": run_id,
