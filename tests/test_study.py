@@ -239,6 +239,8 @@ def study_base_checkpoint(tmp_path):
 
 
 def test_study_pipeline_smoke_run(tmp_path, study_base_checkpoint):
+    import jax
+    from needle.model.checkpoints import read_checkpoint, write_checkpoint
     from needle.study.transplant import transplant_run
     from needle.study.train import run_training_loop
     from needle.study.evaluate import evaluate_run
@@ -260,10 +262,24 @@ def test_study_pipeline_smoke_run(tmp_path, study_base_checkpoint):
     transplant_run("C8", base_checkpoint_path=study_base_checkpoint, output_dir=out_dir)
     transplant_run("I1-8", base_checkpoint_path=study_base_checkpoint, output_dir=out_dir)
 
+    # Production transplants contain half-precision weights; recovery must use
+    # FP32 master weights and Adam moments even when the source is FP16.
+    for run_id in ("C8", "I1-8"):
+        path = os.path.join(out_dir, run_id, "checkpoint.safetensors")
+        checkpoint = read_checkpoint(path)
+        checkpoint["params"] = jax.tree_util.tree_map(
+            lambda x: np.asarray(x, dtype=np.float16), checkpoint["params"]
+        )
+        write_checkpoint(path, checkpoint)
+
     # Train C8 and I1-8
     train_res_c = run_training_loop("C8", checkpoint_dir=out_dir, total_steps=2,
                                       batch_size=1, smoke=True)
     assert train_res_c["steps"] == 2
+    assert np.isfinite(train_res_c["final_loss"])
+    recovered_c = read_checkpoint(os.path.join(out_dir, "C8", "checkpoint.safetensors"))
+    assert all(np.asarray(x).dtype == np.float32
+               for x in jax.tree_util.tree_leaves(recovered_c["params"]))
     resumed_c = run_training_loop("C8", checkpoint_dir=out_dir, total_steps=2,
                                   batch_size=1, resume=True, smoke=True)
     assert resumed_c["steps"] == 2
@@ -271,6 +287,7 @@ def test_study_pipeline_smoke_run(tmp_path, study_base_checkpoint):
     train_res_i = run_training_loop("I1-8", checkpoint_dir=out_dir, total_steps=2,
                                       batch_size=1, smoke=True)
     assert train_res_i["steps"] == 2
+    assert np.isfinite(train_res_i["final_loss"])
 
     # Evaluate
     ev_c = evaluate_run("C8", checkpoint_dir=out_dir, num_samples_per_suite=5, smoke=True)

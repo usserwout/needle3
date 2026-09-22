@@ -18,6 +18,7 @@ from .profile import profile_run
 from .report import generate_study_report
 from .train import run_training_loop
 from .transplant import transplant_run
+from .validate import validate_run
 
 
 def load_study_config(path: str) -> StudyConfig:
@@ -132,6 +133,14 @@ def profile_cmd(args):
     print(f"  Profiling complete. Analytical MACs: {res['analytical_projection_macs']:,d}")
 
 
+def validate_cmd(args):
+    result = validate_run(args.run, checkpoint_dir=args.out_dir,
+                          data_dir=args.data_dir, max_examples=args.max_examples)
+    print(f"{args.run}: held-out NLL={result['macro_nll']:.4f}, "
+          f"token accuracy={result['macro_token_accuracy']:.2%} "
+          "(teacher-forced pilot; not a six-suite benchmark)")
+
+
 def report_cmd(args):
     out_dir = getattr(args, "out_dir", "study_runs")
     print("Synthesizing study report...")
@@ -181,6 +190,12 @@ def main():
     p_prof.add_argument("--run", required=True, choices=list(RUNS.keys()))
     p_prof.add_argument("--out-dir", default="study_runs")
 
+    p_val = sub.add_parser("validate")
+    p_val.add_argument("--run", required=True, choices=list(RUNS.keys()))
+    p_val.add_argument("--out-dir", default="study_runs")
+    p_val.add_argument("--data-dir", default="data/normalized")
+    p_val.add_argument("--max-examples", type=int, default=50)
+
     # report
     p_rep = sub.add_parser("report")
     p_rep.add_argument("--out-dir", default="study_runs")
@@ -192,6 +207,7 @@ def main():
         "train": train_cmd,
         "evaluate": evaluate_cmd,
         "profile": profile_cmd,
+        "validate": validate_cmd,
         "report": report_cmd,
     }
     cmds[args.command](args)
