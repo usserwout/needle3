@@ -74,6 +74,14 @@ def transplant_i1_8(params: Dict[str, Any], config: TransformerConfig) -> Tuple[
 
 def fit_ridge_projection(X: np.ndarray, Y: np.ndarray, alpha_factor: float = 1e-4) -> np.ndarray:
     """Solve min_W ||X W - Y||^2 + lambda ||W||^2 using ridge regression."""
+    # Checkpoint Engram weights are float16. Accumulating the 40,000-row
+    # normal equations in float16 overflows and NumPy does not support a
+    # float16 linear solve. Calibration is an offline numerical operation, so
+    # promote both operands before any multiplication.
+    X = np.asarray(X, dtype=np.float32)
+    Y = np.asarray(Y, dtype=np.float32)
+    if not np.all(np.isfinite(X)) or not np.all(np.isfinite(Y)):
+        raise ValueError("ridge calibration inputs must be finite")
     d_in = X.shape[1]
     XtX = X.T @ X
     trace_val = float(np.trace(XtX))
@@ -81,6 +89,8 @@ def fit_ridge_projection(X: np.ndarray, Y: np.ndarray, alpha_factor: float = 1e-
     ridge_matrix = XtX + reg * np.eye(d_in, dtype=X.dtype)
     XtY = X.T @ Y
     W = np.linalg.solve(ridge_matrix, XtY)
+    if not np.all(np.isfinite(W)):
+        raise ValueError("ridge calibration produced non-finite weights")
     return W
 
 
@@ -95,7 +105,8 @@ def fetch_engram_rows(tables: np.ndarray, indices: np.ndarray) -> np.ndarray:
     if np.any(indices < 0) or np.any(indices >= tables.shape[1]):
         raise ValueError("Engram calibration indices contain an out-of-range slot")
     fetched = tables[np.arange(tables.shape[0])[None, :], indices]
-    return fetched.reshape(indices.shape[0], -1)
+    # Projection and ridge-fit products must accumulate above float16 range.
+    return fetched.reshape(indices.shape[0], -1).astype(np.float32, copy=False)
 
 
 def transplant_i2_12(

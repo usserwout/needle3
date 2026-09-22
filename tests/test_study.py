@@ -163,6 +163,21 @@ def test_ridge_regression_fitting():
     assert mse < 1e-4
 
 
+def test_ridge_regression_promotes_float16_before_normal_equations():
+    rng = np.random.default_rng(7)
+    X = (rng.normal(size=(512, 32)) * 20).astype(np.float16)
+    true_W = rng.normal(size=(32, 8)).astype(np.float32)
+    Y = (X.astype(np.float32) @ true_W).astype(np.float16)
+
+    W_fit = fit_ridge_projection(X, Y)
+    Y32 = Y.astype(np.float32)
+    relative_mse = np.mean((X.astype(np.float32) @ W_fit - Y32) ** 2) / np.var(Y32)
+
+    assert W_fit.dtype == np.float32
+    assert np.all(np.isfinite(W_fit))
+    assert relative_mse < 1e-4
+
+
 def test_cross_layer_attention_produces_identical_cache():
     cfg = TransformerConfig(
         vocab_size=1024,
