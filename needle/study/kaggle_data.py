@@ -21,6 +21,20 @@ def _read_jsonl(path: Path) -> Iterable[dict[str, Any]]:
                 yield json.loads(line)
 
 
+def _read_json(path: Path) -> Any:
+    raw = path.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        # The official SNIPS PlayMusic training file contains one emoji encoded
+        # as a CESU-8 surrogate pair. Preserve it as the intended Unicode code
+        # point rather than discarding the example or inserting replacement
+        # characters.
+        text = raw.decode("utf-8", errors="surrogatepass")
+        text = text.encode("utf-16", errors="surrogatepass").decode("utf-16")
+    return json.loads(text)
+
+
 def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -91,7 +105,7 @@ def _snips(root: Path, split: str) -> Iterable[dict[str, Any]]:
     parsed: list[tuple[str, list[dict[str, Any]]]] = []
     slots_by_intent: dict[str, set[str]] = {}
     for source in sources:
-        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload = _read_json(source)
         for intent, samples in payload.items():
             parsed.append((intent, samples))
             slots = slots_by_intent.setdefault(intent, set())

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from needle.study.kaggle_data import _droidcall, _dstc8, _mobile_actions, _snips
+from needle.study.kaggle_data import _droidcall, _dstc8, _mobile_actions, _read_json, _snips
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -42,6 +42,17 @@ def test_snips_reads_official_train_and_validate_layout(tmp_path):
     assert train[0]["query"] == "play Halo"
     assert train[0]["answers"][0]["arguments"] == {"track": "Halo"}
     assert valid[0]["answers"][0]["name"] == "PlayMusic"
+
+
+def test_snips_legacy_cesu8_emoji_is_preserved(tmp_path):
+    source = tmp_path / "play_music.json"
+    source.write_bytes(
+        b'{"PlayMusic":[{"data":[{"text":"Pop Punk Perfection '
+        + b"\xed\xa0\xbc\xed\xbd\x95"
+        + b'"}]}]}'
+    )
+    payload = _read_json(source)
+    assert payload["PlayMusic"][0]["data"][0]["text"] == "Pop Punk Perfection \U0001f355"
 
 
 def test_dstc8_converts_user_state_with_dialogue_context(tmp_path):
