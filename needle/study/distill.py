@@ -27,8 +27,8 @@ def compute_teacher_cache(
     all_other_mass = []
 
     @jax.jit
-    def teacher_step(ids_chunk):
-        logits = model.apply({"params": params}, ids_chunk, quant=False)
+    def teacher_step(runtime_params, ids_chunk):
+        logits = model.apply({"params": runtime_params}, ids_chunk, quant=False)
         scaled_logits = logits / temperature
         top_l, top_i = jax.lax.top_k(scaled_logits, top_k)
         
@@ -41,7 +41,7 @@ def compute_teacher_cache(
     for start in range(0, num_samples, batch_size):
         end = min(start + batch_size, num_samples)
         chunk = jnp.asarray(input_ids[start:end])
-        top_i, top_l, rem = teacher_step(chunk)
+        top_i, top_l, rem = teacher_step(params, chunk)
         all_top_indices.append(np.asarray(top_i))
         all_top_logits.append(np.asarray(top_l))
         all_other_mass.append(np.asarray(rem))

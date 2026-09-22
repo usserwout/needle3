@@ -21,12 +21,13 @@ def test_kaggle_setup_is_valid_bash_and_guards_gpu_before_installing():
     package_install = source.index("pip install --quiet --no-cache-dir")
     assert gpu_check < package_install
     assert venv_creation < package_install
-    assert 'readonly JAX_VERSION="0.4.38"' in source
+    assert 'readonly JAX_VERSION="0.7.2"' in source
     assert '"jax[cuda12]==${JAX_VERSION}"' in source
     assert 'readonly NUMPY_VERSION="2.0.2"' in source
     assert '"numpy==${NUMPY_VERSION}"' in source
     assert "jax.default_backend()" in source
     assert "export CUDA_VISIBLE_DEVICES=0" in source
+    assert "export LD_LIBRARY_PATH=/usr/local/nvidia/lib64" in source
     assert "unset PYTHONPATH PYTHONHOME" in source
     assert "export PYTHONNOUSERSITE=1" in source
     assert 'source "${VENV_DIR}/bin/activate"' in source

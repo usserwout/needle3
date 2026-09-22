@@ -11,6 +11,7 @@ import jax.numpy as jnp
 
 from ..model.architecture import SimpleAttentionNetwork, TransformerConfig
 from ..model.checkpoints import read_checkpoint
+from .config import runtime_transformer_config
 
 
 def analytical_projection_macs(config: TransformerConfig, assume_cla_skip: bool = True) -> int:
@@ -126,7 +127,7 @@ def profile_run(
     ckpt_path = os.path.join(run_dir, "checkpoint.safetensors")
     ckpt_data = read_checkpoint(ckpt_path)
     params = ckpt_data["params"]
-    config = TransformerConfig(**ckpt_data["config"])
+    config = runtime_transformer_config(ckpt_data["config"])
     metadata = ckpt_data.get("run") or ckpt_data.get("metadata") or {}
 
     total_params = metadata.get("total_parameters", 0)

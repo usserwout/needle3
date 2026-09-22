@@ -12,9 +12,9 @@ import jax.numpy as jnp
 from flax.traverse_util import flatten_dict, unflatten_dict
 import optax
 
-from ..model.architecture import SimpleAttentionNetwork, TransformerConfig
+from ..model.architecture import SimpleAttentionNetwork
 from ..model.checkpoints import read_checkpoint, write_checkpoint
-from .config import RUNS, RunConfig, StudyConfig
+from .config import RUNS, RunConfig, StudyConfig, runtime_transformer_config
 from .distill import compute_distillation_kl, load_teacher_cache
 
 
@@ -124,7 +124,7 @@ def run_training_loop(
     ckpt_data = read_checkpoint(ckpt_path)
     params = ckpt_data["params"]
     config_dict = ckpt_data["config"]
-    config = TransformerConfig(**config_dict)
+    config = runtime_transformer_config(config_dict)
     metadata = ckpt_data.get("run") or ckpt_data.get("metadata") or {}
     inactive_paths = metadata.get("inactive_parameter_paths", [])
     cla_consumers = tuple(metadata.get("inactive_cla_consumers", ()))

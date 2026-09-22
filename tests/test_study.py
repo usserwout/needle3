@@ -14,7 +14,7 @@ from needle.model.architecture import (
     HadamardMLP,
     MultiHeadAttention,
 )
-from needle.study.config import RUNS
+from needle.study.config import RUNS, runtime_transformer_config
 from needle.study.transplant import (
     transplant_i1_8,
     transplant_i2_12,
@@ -34,6 +34,14 @@ def test_default_config_reproduces_needle3_defaults():
     assert cfg.hada_factor_mode == "shared"
     assert cfg.engram_bank_ids == ()
     assert cfg.cla_pairs == ()
+
+
+def test_study_runtime_disables_flash_without_mutating_checkpoint_config():
+    stored = {"flash": True}
+    runtime = runtime_transformer_config(stored)
+
+    assert runtime.flash is False
+    assert stored == {"flash": True}
 
 
 def test_invalid_study_architecture_configs_fail_early():

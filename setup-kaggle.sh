@@ -6,7 +6,7 @@ set -Eeuo pipefail
 
 readonly NUMPY_VERSION="2.0.2"
 readonly SCIPY_VERSION="1.14.1"
-readonly JAX_VERSION="0.4.38"
+readonly JAX_VERSION="0.7.2"
 readonly FLAX_VERSION="0.10.2"
 readonly OPTAX_VERSION="0.2.4"
 readonly DATASETS_VERSION="3.2.0"
@@ -30,6 +30,12 @@ nvidia-smi -L >/dev/null 2>&1 || die \
 
 # Keep the screening study reproducible when Kaggle offers a dual-T4 runtime.
 export CUDA_VISIBLE_DEVICES=0
+
+# Kaggle prepends its CUDA toolkit directories to LD_LIBRARY_PATH. That makes
+# JAX load a mixture of Kaggle and pip CUDA libraries, which can crash inside
+# cuInit/cuSPARSE. Keep only the NVIDIA driver directory; jax[cuda12] then loads
+# its matched CUDA runtime libraries from the isolated environment.
+export LD_LIBRARY_PATH=/usr/local/nvidia/lib64
 
 # Kaggle injects a global sitecustomize via these variables. In an isolated
 # environment it imports optional global packages such as wrapt and emits a
@@ -90,7 +96,7 @@ print("Devices:", jax.devices())
 
 assert np.__version__ == "2.0.2"
 assert scipy.__version__ == "1.14.1"
-assert jax.__version__ == "0.4.38"
+assert jax.__version__ == "0.7.2"
 assert jax.default_backend() == "gpu"
 assert jax.devices(), "JAX returned no devices"
 PY

@@ -7,10 +7,10 @@ import sys
 
 import numpy as np
 
-from ..model.architecture import SimpleAttentionNetwork, TransformerConfig
+from ..model.architecture import SimpleAttentionNetwork
 from ..model.checkpoints import read_checkpoint
 from ..model.tokenizer import get_tokenizer
-from .config import RUNS, StudyConfig, DEFAULT_BASE_CHECKPOINT
+from .config import RUNS, StudyConfig, DEFAULT_BASE_CHECKPOINT, runtime_transformer_config
 from .data import create_study_manifest, encode_study_example, collect_engram_calibration_indices
 from .distill import compute_teacher_cache, save_teacher_cache
 from .evaluate import evaluate_run
@@ -66,7 +66,7 @@ def prepare_cmd(args):
         for teacher_run in ("R8", "R12"):
             t_meta = transplant_run(teacher_run, base_checkpoint_path=base_ckpt, output_dir=out_dir)
             t_ckpt = read_checkpoint(os.path.join(out_dir, teacher_run, "checkpoint.safetensors"))
-            t_cfg = TransformerConfig(**t_ckpt["config"])
+            t_cfg = runtime_transformer_config(t_ckpt["config"])
             t_model = SimpleAttentionNetwork(t_cfg)
             tokenizer = get_tokenizer(t_cfg.vocab_size)
             encoded = [encode_study_example(tokenizer, row, max_len=512)

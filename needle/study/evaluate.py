@@ -8,10 +8,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import scipy.stats
 
-from ..model.architecture import SimpleAttentionNetwork, TransformerConfig
+from ..model.architecture import SimpleAttentionNetwork
 from ..model.checkpoints import read_checkpoint
 from ..model.tokenizer import get_tokenizer, BOS_ID, EOS_ID, PAD_ID
-from .config import RUNS, RunConfig, STUDY_SEED
+from .config import RUNS, RunConfig, STUDY_SEED, runtime_transformer_config
 
 
 def bootstrap_ci(
@@ -123,7 +123,7 @@ def evaluate_run(
     ckpt_path = os.path.join(run_dir, "checkpoint.safetensors")
     ckpt_data = read_checkpoint(ckpt_path)
     params = ckpt_data["params"]
-    config = TransformerConfig(**ckpt_data["config"])
+    config = runtime_transformer_config(ckpt_data["config"])
     tokenizer = get_tokenizer(config.vocab_size)
     model = SimpleAttentionNetwork(config)
 

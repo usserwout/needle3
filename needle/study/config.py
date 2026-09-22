@@ -12,6 +12,21 @@ DEFAULT_BASE_CHECKPOINT = "checkpoints/needle3.safetensors"
 STUDY_SEED = 20260921
 
 
+def runtime_transformer_config(config_dict: Dict[str, Any]):
+    """Build the portable JAX configuration used by every study command.
+
+    Needle checkpoints retain their original ``flash`` setting. Kaggle's T4
+    backend cannot compile that fused attention graph, so the screening runner
+    consistently uses the equivalent unfused implementation without changing
+    checkpoint metadata or architecture accounting.
+    """
+    from ..model.architecture import TransformerConfig
+
+    config = TransformerConfig(**config_dict)
+    config.flash = False
+    return config
+
+
 @dataclass(frozen=True)
 class RunConfig:
     run_id: str
