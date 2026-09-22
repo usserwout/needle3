@@ -35,6 +35,9 @@ def test_kaggle_setup_is_valid_bash_and_guards_gpu_before_installing():
     assert "fetch_checkpoint" in source
     assert 'DroidCall_train.jsonl' in source
     assert 'google/mobile-actions' in source
+    assert 'python -m needle.study.kaggle_data' in source
+    assert 'python -m needle.study prepare --config study.yaml' in source
+    assert 'wrapt==1.17.2' in source
 
 
 def test_kaggle_setup_does_not_reinstall_unpinned_train_extra():

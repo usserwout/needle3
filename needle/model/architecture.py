@@ -484,7 +484,14 @@ class EngramBank(nn.Module):
     def __call__(self, indices, ngram_ok, quant=False):
         tables = self.param("embedding", default_init(),
                             (self.num_tables, self.slots, self.sub_dim))
-        fetched = tables[jnp.arange(self.num_tables), indices]
+        # Use one static table slice per table.  Mixed advanced indexing with
+        # ``jnp.arange`` and a traced index tensor can fall back to NumPy
+        # conversion under JIT; stacking explicit gathers is JAX-safe.
+        fetched = jnp.stack(
+            [jnp.take(tables[j], indices[..., j], axis=0)
+             for j in range(self.num_tables)],
+            axis=-2,
+        )
         fetched = fetched * ngram_ok[..., None]
         e = fetched.reshape(*indices.shape[:2], self.num_tables * self.sub_dim)
         return _aq(e.astype(self.dtype), quant)
@@ -522,7 +529,11 @@ class Engram(nn.Module):
     def __call__(self, indices, ngram_ok, tap_ok, quant=False):
         tables = self.param("embedding", default_init(),
                             (self.num_tables, self.slots, self.sub_dim))
-        fetched = tables[jnp.arange(self.num_tables), indices]
+        fetched = jnp.stack(
+            [jnp.take(tables[j], indices[..., j], axis=0)
+             for j in range(self.num_tables)],
+            axis=-2,
+        )
         fetched = fetched * ngram_ok[..., None]
         e = fetched.reshape(*indices.shape[:2], self.num_tables * self.sub_dim)
         e = _aq(e.astype(self.dtype), quant)
@@ -1385,4 +1396,3 @@ def kv_budget_window(config):
 def effective_kv_window(config):
     budget = kv_budget_window(config)
     return min(budget, config.kv_window) if config.kv_window else budget
-

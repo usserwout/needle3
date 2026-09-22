@@ -69,6 +69,7 @@ python -m pip install --quiet --no-cache-dir --force-reinstall \
     "safetensors==0.4.5" \
     "sentencepiece==0.2.0" \
     "PyYAML==6.0.2" \
+    "wrapt==1.17.2" \
     "pytest==8.3.4"
 
 # The train extra is intentionally not used: it contains unpinned JAX and NumPy
@@ -159,11 +160,22 @@ with output.open("w", encoding="utf-8") as handle:
             "text": row["text"],
             "is_language_sample": True,
         }, ensure_ascii=False) + "\n")
-print("Downloaded", output)
+print("Downloaded", output, flush=True)
+
+# Some Kaggle images crash while PyArrow tears down background state after a
+# streaming dataset closes. The file is complete at this point, so skip Python
+# extension finalizers and return success to the shell.
+import os
+os._exit(0)
 PY
 fi
+
+python -m needle.study.kaggle_data
+
+printf 'Building the immutable manifest and frozen teacher caches...\n'
+XLA_PYTHON_CLIENT_PREALLOCATE=false python -m needle.study prepare --config study.yaml
 
 printf '\nSetup completed successfully.\n'
 printf 'Use .venv-kaggle/bin/python for every study command. No notebook restart is required.\n'
 printf 'Verify later with: .venv-kaggle/bin/python -c "import jax; print(jax.devices())"\n'
-printf 'Raw datasets are under data/raw. The real study still requires the dataset normalization command.\n'
+printf 'Datasets are normalized under data/normalized and teacher caches are in study_runs/teachers.\n'

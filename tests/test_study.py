@@ -52,6 +52,38 @@ def test_real_manifest_refuses_missing_official_data(tmp_path):
         create_study_manifest(output_path=str(tmp_path / "manifest.json"), sample_size=10)
 
 
+def test_manifest_replaces_filtered_rows_from_remaining_pool(tmp_path):
+    counts = {"droidcall": 3, "mobile_actions": 3, "snips": 1, "dstc8": 1, "fineweb_edu": 2}
+    paths = {}
+    for domain, count in counts.items():
+        path = tmp_path / f"{domain}.jsonl"
+        rows = [
+            {"query": f"{domain} prompt {index}", "tools": [], "answers": []}
+            for index in range(count + 1)
+        ]
+        if domain == "fineweb_edu":
+            rows = [
+                {"text": f"{domain} prompt {index}", "is_language_sample": True}
+                for index in range(count + 1)
+            ]
+        path.write_text("".join(__import__("json").dumps(row) + "\n" for row in rows))
+        paths[domain] = str(path)
+
+    first_droid_index = int(np.random.default_rng(7).permutation(4)[0])
+    eval_path = tmp_path / "eval.jsonl"
+    eval_path.write_text(
+        __import__("json").dumps({"query": f"droidcall prompt {first_droid_index}"}) + "\n"
+    )
+    manifest = create_study_manifest(
+        dataset_paths=paths,
+        evaluation_paths=[str(eval_path)],
+        output_path=str(tmp_path / "manifest.json"),
+        sample_size=10,
+        seed=7,
+    )
+    assert len(manifest["examples"]) == 10
+
+
 def test_layer_indices_8l_and_12l():
     idx8 = ladder_layer_indices(20, 8)
     assert idx8 == (0, 4, 6, 9, 11, 14, 16, 19)

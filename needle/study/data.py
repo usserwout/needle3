@@ -254,15 +254,27 @@ def create_study_manifest(
                 synth = build_synthetic_task_examples(count - len(loaded), domain=domain, seed=seed + 2)
             loaded.extend(synth)
 
+        # Shuffle the complete pool, then filter evaluation duplicates and
+        # duplicates selected from another domain before taking ``count``.
+        # Sampling exactly ``count`` rows first can leave an apparent shortage
+        # even when the training split contains enough valid rows.
         perm = rng.permutation(len(loaded))
-        chosen = [loaded[idx] for idx in perm[:count]]
-
-        # Deduplicate and isolate prompts
-        for ex in chosen:
+        added = 0
+        for idx in perm:
+            ex = loaded[idx]
             p_hash = hash_prompt(ex.get("query", ex.get("text", "")))
-            if p_hash not in eval_hash_set and p_hash not in seen_hashes:
-                manifest_examples.append(ex)
-                seen_hashes.add(p_hash)
+            if p_hash in eval_hash_set or p_hash in seen_hashes:
+                continue
+            manifest_examples.append(ex)
+            seen_hashes.add(p_hash)
+            added += 1
+            if added == count:
+                break
+        if added < count and not allow_synthetic:
+            raise ValueError(
+                f"{domain} contains only {added} unique non-evaluation rows, "
+                f"but {count} are required"
+            )
 
     rng.shuffle(manifest_examples)
     if not allow_synthetic and len(manifest_examples) != sample_size:
