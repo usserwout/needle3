@@ -11,7 +11,8 @@ if [[ ! -x .venv-kaggle/bin/python ]]; then
 fi
 for required in checkpoints/needle3.safetensors study_runs/train_data.npz \
                 study_runs/teachers/R8_cache.npz study_runs/teachers/R12_cache.npz \
-                study_runs/engram_calibration_indices.npz; do
+                study_runs/engram_calibration_indices.npz \
+                data/normalized/droidcall_eval.jsonl; do
     if [[ ! -s "$required" ]]; then
         echo "Missing $required; run bash setup-kaggle.sh first." >&2
         exit 1
@@ -62,3 +63,27 @@ if (( status != 0 )); then
     exit 1
 fi
 echo "All five recovery runs completed."
+
+validate_queue() {
+    local gpu="$1"
+    shift
+    local run
+    for run in "$@"; do
+        echo "GPU $gpu: validating $run"
+        CUDA_VISIBLE_DEVICES="$gpu" .venv-kaggle/bin/python -u -m needle.study validate \
+            --run "$run" --max-examples 50 2>&1 | tee "study_runs/$run/validate.log"
+    done
+}
+
+validate_queue 0 R12 C12 I2-12 &
+gpu0_pid=$!
+validate_queue 1 R8 C8 I1-8 I3-12 &
+gpu1_pid=$!
+status=0
+wait "$gpu0_pid" || status=1
+wait "$gpu1_pid" || status=1
+if (( status != 0 )); then
+    echo "At least one validation queue failed; inspect study_runs/*/validate.log." >&2
+    exit 1
+fi
+echo "Held-out validation completed on both GPUs."

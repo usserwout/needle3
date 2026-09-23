@@ -67,6 +67,7 @@ def validate_run(
             str(row.get("query", "")).encode("utf-8")
         ).hexdigest())
         selected = rows[:max_examples]
+        print(f"{run_id} | {suite}: validating {len(selected)} held-out examples", flush=True)
         overlaps = [row for row in selected if hash_prompt(row.get("query", "")) in train_hashes]
         if overlaps:
             raise ValueError(f"{suite} validation overlaps recovery training by {len(overlaps)} prompts")
@@ -95,6 +96,9 @@ def validate_run(
                     "token_accuracy": accuracy,
                     "target_tokens": int(count),
                 })
+            completed = min(start + batch_size, len(selected))
+            if completed % 10 < batch_size or completed == len(selected):
+                print(f"{run_id} | {suite}: {completed}/{len(selected)}", flush=True)
         if not examples:
             raise ValueError(f"no supervised target tokens in {path}")
         suites[suite] = {
@@ -103,6 +107,8 @@ def validate_run(
             "examples": examples,
             "skipped_truncated": len(selected) - len(examples),
         }
+        print(f"{run_id} | {suite}: NLL {suites[suite]['nll']:.4f}, "
+              f"token accuracy {suites[suite]['token_accuracy']:.2%}", flush=True)
 
     result = {
         "run_id": run_id,
