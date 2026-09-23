@@ -100,6 +100,19 @@ def encode_study_example(
     else:
         prompt_ids = tokenizer.encode(prompt)
         target_ids = tokenizer.encode(target)
+        # Keep the complete supervised response inside the fixed context. Long
+        # tool schemas otherwise consume the whole window and silently turn a
+        # task example into an all-zero loss mask. Retain the prompt opening
+        # (roles/format) and its end (the user request) when it must be cut.
+        prompt_budget = max_len - len(target_ids) - 2  # BOS and EOS
+        if prompt_budget < 1:
+            raise ValueError(
+                f"response needs {len(target_ids)} tokens, leaving no prompt "
+                f"space in the {max_len}-token study window"
+            )
+        if len(prompt_ids) > prompt_budget:
+            head = min(64, prompt_budget // 4)
+            prompt_ids = prompt_ids[:head] + prompt_ids[-(prompt_budget - head):]
         ids = [BOS_ID] + prompt_ids + target_ids + [EOS_ID]
         # Mask prompt positions; compute loss strictly on response tokens
         mask = [0.0] * (1 + len(prompt_ids)) + [1.0] * (len(target_ids) + 1)

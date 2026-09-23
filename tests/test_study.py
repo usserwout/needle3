@@ -21,7 +21,10 @@ from needle.study.transplant import (
     transplant_i3_12,
     fit_ridge_projection,
 )
-from needle.study.data import create_study_manifest, hash_prompt, normalize_prompt
+from needle.study.data import (
+    create_study_manifest, encode_study_example, hash_prompt, normalize_prompt,
+    render_study_example,
+)
 from needle.study.distill import compute_distillation_kl
 from needle.study.evaluate import bootstrap_ci, mcnemar_test, holm_bonferroni_correction
 from needle.study.profile import analytical_projection_macs, analytical_kv_bytes
@@ -58,6 +61,27 @@ def test_invalid_study_architecture_configs_fail_early():
 def test_real_manifest_refuses_missing_official_data(tmp_path):
     with pytest.raises(ValueError, match="official training split"):
         create_study_manifest(output_path=str(tmp_path / "manifest.json"), sample_size=10)
+
+
+def test_long_tool_schema_preserves_complete_response_and_user_query():
+    class CharacterTokenizer:
+        def encode(self, value):
+            return [ord(character) for character in value]
+
+    tokenizer = CharacterTokenizer()
+    row = {
+        "tools": [{"name": f"tool_{i}", "description": "x" * 80} for i in range(20)],
+        "query": "unique user request",
+        "answers": [{"name": "tool_0", "arguments": {}}],
+    }
+    _, target, _ = render_study_example(row)
+    target_ids = tokenizer.encode(target)
+    ids, mask = encode_study_example(tokenizer, row, max_len=256)
+    assert ids[-len(target_ids) - 1:-1] == target_ids
+    assert mask[-len(target_ids) - 1:] == [1.0] * (len(target_ids) + 1)
+    assert tokenizer.encode(row["query"]) in [
+        ids[start:start + len(row["query"])] for start in range(len(ids) - len(row["query"]) + 1)
+    ]
 
 
 def test_manifest_replaces_filtered_rows_from_remaining_pool(tmp_path):
