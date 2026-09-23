@@ -16,6 +16,7 @@ from ..model.architecture import SimpleAttentionNetwork
 from ..model.checkpoints import read_checkpoint, write_checkpoint
 from .config import RUNS, RunConfig, StudyConfig, runtime_transformer_config
 from .distill import compute_distillation_kl, load_teacher_cache
+from .token_batches import TokenCursor, next_target_batches
 
 
 def classify_param_path(path_tuple: Tuple[str, ...], inactive_paths: List[str]) -> str:
@@ -117,6 +118,8 @@ def run_training_loop(
     resume: bool = True,
     smoke: bool = False,
     progress: Optional[Callable[[str], None]] = None,
+    target_tokens_per_update: Optional[int] = None,
+    stop_after_steps: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Execute recovery training for a specific screening run."""
     run_dir = os.path.join(checkpoint_dir, run_id)
@@ -149,12 +152,20 @@ def run_training_loop(
     opt_state = optimizer.init(params)
     state_path = os.path.join(run_dir, "training_state.pkl")
     start_step = 0
+    token_cursor = TokenCursor()
     if resume and os.path.exists(state_path):
         with open(state_path, "rb") as handle:
             saved_state = pickle.load(handle)
         start_step = int(saved_state["step"])
         if saved_state.get("optimizer_precision") != "float32":
             raise ValueError("saved optimizer state predates FP32 training; retransplant and train without --resume")
+        if target_tokens_per_update is not None:
+            if (saved_state.get("total_steps") != total_steps or
+                    saved_state.get("target_tokens_per_update") != target_tokens_per_update):
+                raise ValueError("full-study schedule or target-token batch differs from saved state")
+            token_cursor = TokenCursor(**saved_state["token_cursor"])
+        elif saved_state.get("target_tokens_per_update") is not None:
+            raise ValueError("cannot resume full-study state with the pilot batch mode")
         opt_state = saved_state["opt_state"]
         if start_step > total_steps:
             raise ValueError(
@@ -206,6 +217,19 @@ def run_training_loop(
         new_p = optax.apply_updates(p, updates)
         return new_p, new_opt_s, loss, ce
 
+    @jax.jit
+    def microbatch_grad(p, ids, mask, top_i, top_l, rem_m):
+        (loss, ce), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+            p, ids, mask, top_i, top_l, rem_m
+        )
+        return grads, loss, ce
+
+    @jax.jit
+    def apply_accumulated_grad(p, opt_s, grads):
+        updates, new_opt_s = optimizer.update(grads, opt_s, p)
+        updates = freeze_scanned_cla_consumer_updates(updates, cla_consumers)
+        return optax.apply_updates(p, updates), new_opt_s
+
     data_path = os.path.join(checkpoint_dir, "train_data.npz")
     if not os.path.exists(data_path):
         raise FileNotFoundError(
@@ -216,6 +240,14 @@ def run_training_loop(
     target_masks = np.asarray(train_data["target_mask"], dtype=np.float32)
     if len(input_ids) == 0 or input_ids.shape != target_masks.shape:
         raise ValueError("prepared input_ids and target_mask must be non-empty and have equal shapes")
+    if target_tokens_per_update is not None and np.any(target_masks[:, 1:].sum(axis=1) == 0):
+        raise ValueError("full study cannot train rows without supervised target tokens")
+    if stop_after_steps is not None and not start_step < stop_after_steps <= total_steps:
+        if start_step == stop_after_steps:
+            return {"run_id": run_id, "steps": start_step,
+                    "final_loss": float(metadata.get("final_loss", 0.0)),
+                    "tokens_per_second": float(metadata.get("tokens_per_second", 0.0))}
+        raise ValueError("stop_after_steps must follow the saved step and not exceed total_steps")
     if teacher_data is not None and len(teacher_data["top_indices"]) != len(input_ids):
         raise ValueError("teacher cache does not align with the prepared training examples")
 
@@ -226,24 +258,55 @@ def run_training_loop(
     base_tokens_processed = int(metadata.get("tokens_processed", 0))
     supervised_tokens_processed = 0
 
-    requested_end_step = min(total_steps, start_step + 2) if smoke else total_steps
+    requested_end_step = min(
+        total_steps,
+        start_step + 2 if smoke else total_steps,
+        stop_after_steps if stop_after_steps is not None else total_steps,
+    )
+    progress_every = 25 if target_tokens_per_update is None else max(1, min(5, total_steps // 100))
     for step in range(start_step, requested_end_step):
-        start = (step * batch_size) % len(order)
-        batch_indices = np.take(order, np.arange(start, start + batch_size), mode="wrap")
-        batch_ids = input_ids[batch_indices]
-        batch_mask = target_masks[batch_indices]
-        supervised_tokens_processed += int(batch_mask[:, 1:].sum())
-
-        if teacher_data is not None:
-            top_i = jnp.asarray(teacher_data["top_indices"][batch_indices])
-            top_l = jnp.asarray(teacher_data["top_logits"][batch_indices])
-            rem_m = jnp.asarray(teacher_data["other_mass"][batch_indices])
+        if target_tokens_per_update is None:
+            start = (step * batch_size) % len(order)
+            batches = [(np.take(order, np.arange(start, start + batch_size), mode="wrap"),
+                        target_masks[np.take(order, np.arange(start, start + batch_size), mode="wrap")])]
         else:
-            top_i, top_l, rem_m = None, None, None
-
-        params, opt_state, loss_val, ce_val = train_step(
-            params, opt_state, jnp.asarray(batch_ids), jnp.asarray(batch_mask), top_i, top_l, rem_m
-        )
+            batches, token_cursor = next_target_batches(
+                target_masks, order, token_cursor, target_tokens_per_update, batch_size
+            )
+        gradient_sum = None
+        weighted_loss = jnp.asarray(0.0, dtype=jnp.float32)
+        weighted_ce = jnp.asarray(0.0, dtype=jnp.float32)
+        for batch_indices, batch_mask in batches:
+            batch_ids = input_ids[batch_indices]
+            count = int(batch_mask[:, 1:].sum())
+            supervised_tokens_processed += count
+            if teacher_data is not None:
+                top_i = jnp.asarray(teacher_data["top_indices"][batch_indices])
+                top_l = jnp.asarray(teacher_data["top_logits"][batch_indices])
+                rem_m = jnp.asarray(teacher_data["other_mass"][batch_indices])
+            else:
+                top_i, top_l, rem_m = None, None, None
+            if target_tokens_per_update is None:
+                params, opt_state, loss_val, ce_val = train_step(
+                    params, opt_state, jnp.asarray(batch_ids), jnp.asarray(batch_mask),
+                    top_i, top_l, rem_m
+                )
+            else:
+                grads, partial_loss, partial_ce = microbatch_grad(
+                    params, jnp.asarray(batch_ids), jnp.asarray(batch_mask), top_i, top_l, rem_m
+                )
+                weight = count / target_tokens_per_update
+                if gradient_sum is None:
+                    gradient_sum = jax.tree_util.tree_map(lambda grad: grad * weight, grads)
+                else:
+                    gradient_sum = jax.tree_util.tree_map(
+                        lambda total, grad: total + grad * weight, gradient_sum, grads
+                    )
+                weighted_loss = weighted_loss + partial_loss * weight
+                weighted_ce = weighted_ce + partial_ce * weight
+        if target_tokens_per_update is not None:
+            params, opt_state = apply_accumulated_grad(params, opt_state, gradient_sum)
+            loss_val, ce_val = weighted_loss, weighted_ce
         loss_scalar, ce_scalar = float(loss_val), float(ce_val)
         if not np.isfinite(loss_scalar) or not np.isfinite(ce_scalar):
             raise FloatingPointError(
@@ -252,8 +315,10 @@ def run_training_loop(
             )
         step_losses.append(loss_scalar)
 
-        if (step + 1) % 25 == 0 or step == requested_end_step - 1:
-            msg = f"Run {run_id} | Step {step+1}/{total_steps} | Loss: {float(loss_val):.4f} | CE: {float(ce_val):.4f}"
+        if (step + 1) % progress_every == 0 or step == requested_end_step - 1:
+            msg = (f"Run {run_id} | Step {step+1}/{total_steps} | "
+                   f"Targets: {base_tokens_processed + supervised_tokens_processed:,} | "
+                   f"Loss: {loss_scalar:.4f} | CE: {ce_scalar:.4f}")
             if progress:
                 progress(msg)
 
@@ -268,7 +333,10 @@ def run_training_loop(
             })
             with open(state_path, "wb") as handle:
                 pickle.dump({"step": step + 1, "opt_state": opt_state,
-                             "optimizer_precision": "float32"}, handle)
+                             "optimizer_precision": "float32",
+                             "total_steps": total_steps,
+                             "target_tokens_per_update": target_tokens_per_update,
+                             "token_cursor": vars(token_cursor)}, handle)
 
     elapsed = time.time() - start_time
     completed_steps = requested_end_step
@@ -289,7 +357,10 @@ def run_training_loop(
     })
     with open(state_path, "wb") as handle:
         pickle.dump({"step": completed_steps, "opt_state": opt_state,
-                     "optimizer_precision": "float32"}, handle)
+                     "optimizer_precision": "float32",
+                     "total_steps": total_steps,
+                     "target_tokens_per_update": target_tokens_per_update,
+                     "token_cursor": vars(token_cursor)}, handle)
 
     summary = {
         "run_id": run_id,

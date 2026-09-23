@@ -113,7 +113,9 @@ def train_cmd(args):
     steps = 2 if smoke else getattr(args, "steps", 100)
     print(f"Starting recovery training for {run_id} ({steps} steps)...")
     res = run_training_loop(run_id, checkpoint_dir=out_dir, total_steps=steps,
-                            resume=args.resume, smoke=smoke, progress=print)
+                            resume=args.resume, smoke=smoke, progress=print,
+                            target_tokens_per_update=args.target_tokens_per_update,
+                            stop_after_steps=args.stop_after)
     print(f"  Training finished: {res}")
 
 
@@ -176,6 +178,10 @@ def main():
     p_train.add_argument("--resume", action="store_true")
     p_train.add_argument("--smoke", action="store_true")
     p_train.add_argument("--steps", type=int, default=100)
+    p_train.add_argument("--target-tokens-per-update", type=int,
+                         help="Accumulate exactly this many supervised tokens before each update")
+    p_train.add_argument("--stop-after", type=int,
+                         help="Stop at this update while preserving the original optimizer schedule")
     p_train.add_argument("--out-dir", default="study_runs")
 
     # evaluate

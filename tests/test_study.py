@@ -29,6 +29,31 @@ from needle.study.distill import compute_distillation_kl
 from needle.study.evaluate import bootstrap_ci, mcnemar_test, holm_bonferroni_correction
 from needle.study.profile import analytical_projection_macs, analytical_kv_bytes
 from needle.study.report import evaluate_decision_rules
+from needle.study.token_batches import TokenCursor, next_target_batches
+
+
+def test_exact_target_batches_resume_without_repeating_positions():
+    masks = np.asarray([
+        [0, 0, 1, 1, 1, 0],
+        [0, 0, 0, 1, 1, 0],
+        [0, 1, 1, 1, 1, 0],
+    ], dtype=np.float32)
+    order = np.asarray([2, 0, 1], dtype=np.int32)
+    first, cursor = next_target_batches(masks, order, TokenCursor(), 5, 2)
+    second, next_cursor = next_target_batches(masks, order, cursor, 5, 2)
+
+    def selected(batches):
+        return [(int(row), int(pos))
+                for rows, batch_masks in batches
+                for row, mask in zip(rows, batch_masks)
+                for pos in np.flatnonzero(mask)]
+
+    expected = [(2, 1), (2, 2), (2, 3), (2, 4), (0, 2),
+                (0, 3), (0, 4), (1, 3), (1, 4), (2, 1)]
+    assert selected(first) + selected(second) == expected
+    assert next_cursor == TokenCursor(0, 1)
+    assert all(rows.shape == (2,) and batch_masks.shape == (2, 6)
+               for rows, batch_masks in first + second)
 
 
 def test_default_config_reproduces_needle3_defaults():
@@ -328,3 +353,39 @@ def test_study_pipeline_smoke_run(tmp_path, study_base_checkpoint):
     # Report
     with pytest.raises(ValueError, match="synthetic smoke"):
         generate_study_report(output_dir=out_dir)
+
+
+def test_target_token_training_resumes_at_the_same_position(tmp_path, study_base_checkpoint):
+    import pickle
+    from needle.model.checkpoints import read_checkpoint
+    from needle.study.train import run_training_loop
+    from needle.study.transplant import transplant_run
+
+    out_dir = str(tmp_path / "exact_target_run")
+    os.makedirs(out_dir, exist_ok=True)
+    input_ids = np.tile(np.arange(1, 33, dtype=np.int32), (3, 1))
+    target_mask = np.zeros_like(input_ids, dtype=np.float32)
+    target_mask[:, 24:] = 1
+    np.savez_compressed(os.path.join(out_dir, "train_data.npz"),
+                        input_ids=input_ids, target_mask=target_mask)
+    transplant_run("C8", base_checkpoint_path=study_base_checkpoint, output_dir=out_dir)
+
+    first = run_training_loop("C8", checkpoint_dir=out_dir, total_steps=3,
+                              batch_size=2, target_tokens_per_update=11,
+                              stop_after_steps=1, smoke=True)
+    assert first["steps"] == 1
+    state_path = os.path.join(out_dir, "C8", "training_state.pkl")
+    with open(state_path, "rb") as handle:
+        saved = pickle.load(handle)
+    assert saved["token_cursor"] == {"example": 1, "target": 3}
+
+    final = run_training_loop("C8", checkpoint_dir=out_dir, total_steps=3,
+                              batch_size=2, target_tokens_per_update=11,
+                              resume=True, smoke=True)
+    assert final["steps"] == 3
+    checkpoint = read_checkpoint(os.path.join(out_dir, "C8", "checkpoint.safetensors"))
+    assert checkpoint["run"]["tokens_processed"] == 33
+    with pytest.raises(ValueError, match="schedule or target-token batch"):
+        run_training_loop("C8", checkpoint_dir=out_dir, total_steps=4,
+                          batch_size=2, target_tokens_per_update=11,
+                          resume=True, smoke=True)
